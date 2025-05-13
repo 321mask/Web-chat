@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Multi-Channel Chat</title>
+    <style>
+      body {
+        font-family: Arial;
+        margin: 0;
+        display: flex;
+        height: 100vh;
+      }
+      #sidebar {
+        width: 200px;
+        border-right: 1px solid #ccc;
+        padding: 10px;
+      }
+      #sidebar ul {
+        list-style: none;
+        padding: 0;
+      }
+      #sidebar li {
+        cursor: pointer;
+        margin: 5px 0;
+      }
+      #sidebar li.active {
+        font-weight: bold;
+        color: #007bff;
+      }
+      #chat {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+      #messages {
+        flex: 1;
+        padding: 10px;
+        overflow-y: auto;
+        border-bottom: 1px solid #ccc;
+      }
+      #form {
+        display: flex;
+        padding: 10px;
+      }
+      #form input {
+        flex: 1;
+        padding: 5px;
+      }
+      #form button {
+        padding: 5px 10px;
+      }
+      #userList li {
+        cursor: pointer;
+        color: green;
+      }
+      #privateMessages {
+        padding: 10px;
+        border-top: 1px solid #ccc;
+        background: #f0f0f0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="sidebar">
+      <h3>Canaux</h3>
+      <ul>
+        <li data-channel="général" class="active">#général</li>
+        <li data-channel="random">#random</li>
+        <li data-channel="technologie">#technologie</li>
+      </ul>
+      <h4>Utilisateurs</h4>
+      <ul id="userList"></ul>
+    </div>
+    <div id="chat">
+      <div id="messages"></div>
+      <form id="form">
+        <input
+          id="input"
+          autocomplete="off"
+          placeholder="Écrivez votre message..."
+        />
+        <button>Envoyer</button>
+      </form>
+    </div>
+    <div
+      id="privateModal"
+      style="
+        display: none;
+        position: fixed;
+        top: 20%;
+        left: 35%;
+        background: white;
+        border: 1px solid #ccc;
+        padding: 20px;
+        z-index: 1000;
+      "
+    >
+      <h3>Message privé à <span id="modalUser"></span></h3>
+      <textarea id="privateText" rows="4" style="width: 100%"></textarea>
+      <br />
+      <button onclick="sendPrivateMessage()">Envoyer</button>
+      <button onclick="closeModal()">Annuler</button>
+    </div>
+
+    <script>
+      const socket = new WebSocket(`ws://${location.host}`);
+      const form = document.getElementById("form");
+      const input = document.getElementById("input");
+      const messages = document.getElementById("messages");
+      const userList = document.getElementById("userList");
+      const channels = document.querySelectorAll("#sidebar li");
+
+      let currentChannel = "général";
+      const history = { général: [], random: [], technologie: [] };
+
+      let username = "";
+      let selectedUser = "";
+
+      userList.addEventListener("click", (e) => {
+        if (e.target.tagName === "LI") {
+          selectedUser = e.target.textContent;
+          document.getElementById("modalUser").textContent = selectedUser;
+          document.getElementById("privateModal").style.display = "block";
+        }
+      });
+
+      function sendPrivateMessage() {
+        const content = document.getElementById("privateText").value.trim();
+        if (content) {
+          socket.send(
+            JSON.stringify({
+              type: "privateMessage",
+              to: selectedUser,
+              content,
+            })
+          );
+          displayPrivateMessage(`À ${selectedUser}: ${content}`);
+        }
+        closeModal();
+      }
+
+      function closeModal() {
+        document.getElementById("privateModal").style.display = "none";
+        document.getElementById("privateText").value = "";
+      }
+
+      function renderMessages() {
+        messages.innerHTML = "";
+        history[currentChannel].forEach((msg) => {
+          const div = document.createElement("div");
+          div.textContent = msg;
+          messages.appendChild(div);
+        });
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function switchChannel(channel) {
+        currentChannel = channel;
+        socket.send(JSON.stringify({ type: "switch", channel }));
+        document
+          .querySelectorAll("#sidebar li")
+          .forEach((li) =>
+            li.classList.toggle("active", li.dataset.channel === channel)
+          );
+        renderMessages();
+      }
+      function displayPrivateMessage(msg) {
+        const priv =
+          document.getElementById("privateMessages") || createPrivateSection();
+        const div = document.createElement("div");
+        div.textContent = msg;
+        priv.appendChild(div);
+        priv.scrollTop = priv.scrollHeight;
+      }
+
+      function createPrivateSection() {
+        const div = document.createElement("div");
+        div.id = "privateMessages";
+        div.innerHTML = "<h4>Messages Privés</h4>";
+        document.getElementById("chat").appendChild(div);
+        return div;
+      }
+
+      socket.addEventListener("open", () => {
+        username = prompt("Entrez votre nom :")?.trim() || "Anonyme";
+        socket.send(JSON.stringify({ type: "username", username }));
+      });
+
+      socket.addEventListener("message", async (event) => {
+        const raw = event.data;
+
+        let data;
+        if (typeof raw === "string") {
+          data = JSON.parse(raw);
+        } else if (raw instanceof Blob) {
+          const text = await raw.text();
+          data = JSON.parse(text);
+        } else {
+          console.error("Unknown message format", raw);
+          return;
+        }
+
+        if (data.type === "chat") {
+          if (!history[data.channel]) {
+            history[data.channel] = [];
+          }
+          history[data.channel].push(data.text);
+
+          if (data.channel === currentChannel) {
+            renderMessages();
+          }
+        }
+
+        if (data.type === "privateMessage") {
+          const div = document.createElement("div");
+          div.style.color = "purple";
+          displayPrivateMessage(`[MP de ${data.from}] ${data.content}`);
+          messages.appendChild(div);
+        }
+
+        if (data.type === "userlist") {
+          userList.innerHTML = "";
+          data.users.forEach((name) => {
+            const li = document.createElement("li");
+            li.textContent = name;
+            userList.appendChild(li);
+          });
+        }
+      });
+
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text) return;
+
+        if (text.startsWith("/pm ")) {
+          // Format: /pm username message
+          const [_, to, ...msgParts] = text.split(" ");
+          const content = msgParts.join(" ");
+          socket.send(
+            JSON.stringify({
+              type: "privateMessage",
+              to,
+              content,
+            })
+          );
+        } else {
+          socket.send(JSON.stringify({ type: "chat", text }));
+        }
+
+        input.value = "";
+      });
+
+      channels.forEach((li) =>
+        li.addEventListener("click", () => switchChannel(li.dataset.channel))
+      );
+    </script>
+  </body>
+</html>
